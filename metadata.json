@@ -1,0 +1,5 @@
+{
+  "name": "AI Chronolocation Verification System",
+  "description": "An interactive dashboard that uses AI to analyze images and videos to verify their location and time. It provides a transparent, step-by-step log of the AI's reasoning process, from shadow analysis to cross-referencing geographical data.",
+  "requestFramePermissions": []
+}
