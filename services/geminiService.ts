@@ -1,8 +1,8 @@
 import { GoogleGenAI, GenerateContentResponse } from "@google/genai";
 import type { Report } from '../types';
 
-const COPERNICUS_CLIENT_ID = 'sh-ba12f06c-4f5d-46ae-ae18-820c65592585';
-const COPERNICUS_CLIENT_SECRET = '7e4PZsYWt0sOBBGouJ1zih6MugRelVxj';
+// Backend API URL - credentials are stored securely on the server
+const BACKEND_API_URL = import.meta.env.VITE_BACKEND_API_URL || 'http://localhost:3001';
 
 // Utility function to convert file to base64
 const fileToBase64 = (file: File): Promise<string> => {
@@ -36,83 +36,34 @@ export class GeminiService {
     this.ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
   }
 
-  async getCopernicusToken(): Promise<string | null> {
-    try {
-      const response = await fetch('https://identity.dataspace.copernicus.eu/auth/realms/CDSE/protocol/openid-connect/token', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/x-www-form-urlencoded',
-        },
-        body: new URLSearchParams({
-          grant_type: 'client_credentials',
-          client_id: COPERNICUS_CLIENT_ID,
-          client_secret: COPERNICUS_CLIENT_SECRET
-        })
-      });
-
-      if (!response.ok) {
-        throw new Error('Authentication failed');
-      }
-
-      const data = await response.json();
-      return data.access_token;
-    } catch (error) {
-      console.error('Copernicus auth failed:', error);
-      return null;
-    }
-  }
+  // Authentication is now handled by the backend proxy
+  // This method is no longer needed but kept for reference
 
   async getSatelliteImagery(lat: number, lon: number, date: string | null): Promise<SatelliteImagery> {
     try {
-      const token = await this.getCopernicusToken();
-      if (!token) {
-        return {
-          available: false,
-          location: { lat, lon },
-          searchDate: date || new Date().toISOString().split('T')[0]
-        };
-      }
-
       const targetDate = date ? new Date(date) : new Date();
       const dateStr = targetDate.toISOString().split('T')[0];
-      
+
       // Get date 30 days before for comparison
       const beforeDate = new Date(targetDate);
       beforeDate.setDate(beforeDate.getDate() - 30);
       const beforeDateStr = beforeDate.toISOString().split('T')[0];
 
-      // Search for available imagery
-      const searchUrl = `https://catalogue.dataspace.copernicus.eu/odata/v1/Products?$filter=Collection/Name eq 'SENTINEL-2' and OData.CSC.Intersects(area=geography'SRID=4326;POINT(${lon} ${lat})') and ContentDate/Start gt ${beforeDateStr}T00:00:00.000Z and ContentDate/Start lt ${dateStr}T23:59:59.999Z&$orderby=ContentDate/Start desc&$top=5`;
+      // Call backend proxy instead of Copernicus API directly
+      // This avoids CORS issues and keeps credentials secure
+      const searchUrl = `${BACKEND_API_URL}/api/satellite/search?lat=${lat}&lon=${lon}&startDate=${beforeDateStr}&endDate=${dateStr}&limit=5`;
 
       const searchResponse = await fetch(searchUrl);
-      
+
       if (!searchResponse.ok) {
-        throw new Error('Imagery search failed');
+        const errorData = await searchResponse.json().catch(() => ({}));
+        console.error('Satellite search failed:', errorData);
+        throw new Error(errorData.message || 'Imagery search failed');
       }
 
-      const searchData = await searchResponse.json();
-      
-      if (searchData.value && searchData.value.length > 0) {
-        const imagery = searchData.value.map((item: any) => ({
-          id: item.Id,
-          name: item.Name,
-          date: item.ContentDate.Start,
-          cloudCover: item.CloudCover
-        }));
+      const data = await searchResponse.json();
 
-        return {
-          available: true,
-          imagery,
-          location: { lat, lon },
-          searchDate: dateStr
-        };
-      } else {
-        return {
-          available: false,
-          location: { lat, lon },
-          searchDate: dateStr
-        };
-      }
+      return data;
     } catch (error) {
       console.error('Satellite imagery error:', error);
       return {
