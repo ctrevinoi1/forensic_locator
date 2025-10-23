@@ -1,8 +1,8 @@
 import { GoogleGenAI, GenerateContentResponse } from "@google/genai";
 import type { Report } from '../types';
 
-const COPERNICUS_CLIENT_ID = 'sh-ba12f06c-4f5d-46ae-ae18-820c65592585';
-const COPERNICUS_CLIENT_SECRET = '7e4PZsYWt0sOBBGouJ1zih6MugRelVxj';
+// Backend API URL - credentials are stored securely on the server
+const BACKEND_API_URL = import.meta.env.VITE_BACKEND_API_URL || 'http://localhost:3001';
 
 // Utility function to convert file to base64
 const fileToBase64 = (file: File): Promise<string> => {
@@ -36,83 +36,34 @@ export class GeminiService {
     this.ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
   }
 
-  async getCopernicusToken(): Promise<string | null> {
-    try {
-      const response = await fetch('https://identity.dataspace.copernicus.eu/auth/realms/CDSE/protocol/openid-connect/token', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/x-www-form-urlencoded',
-        },
-        body: new URLSearchParams({
-          grant_type: 'client_credentials',
-          client_id: COPERNICUS_CLIENT_ID,
-          client_secret: COPERNICUS_CLIENT_SECRET
-        })
-      });
-
-      if (!response.ok) {
-        throw new Error('Authentication failed');
-      }
-
-      const data = await response.json();
-      return data.access_token;
-    } catch (error) {
-      console.error('Copernicus auth failed:', error);
-      return null;
-    }
-  }
+  // Authentication is now handled by the backend proxy
+  // This method is no longer needed but kept for reference
 
   async getSatelliteImagery(lat: number, lon: number, date: string | null): Promise<SatelliteImagery> {
     try {
-      const token = await this.getCopernicusToken();
-      if (!token) {
-        return {
-          available: false,
-          location: { lat, lon },
-          searchDate: date || new Date().toISOString().split('T')[0]
-        };
-      }
-
       const targetDate = date ? new Date(date) : new Date();
       const dateStr = targetDate.toISOString().split('T')[0];
-      
+
       // Get date 30 days before for comparison
       const beforeDate = new Date(targetDate);
       beforeDate.setDate(beforeDate.getDate() - 30);
       const beforeDateStr = beforeDate.toISOString().split('T')[0];
 
-      // Search for available imagery
-      const searchUrl = `https://catalogue.dataspace.copernicus.eu/odata/v1/Products?$filter=Collection/Name eq 'SENTINEL-2' and OData.CSC.Intersects(area=geography'SRID=4326;POINT(${lon} ${lat})') and ContentDate/Start gt ${beforeDateStr}T00:00:00.000Z and ContentDate/Start lt ${dateStr}T23:59:59.999Z&$orderby=ContentDate/Start desc&$top=5`;
+      // Call backend proxy instead of Copernicus API directly
+      // This avoids CORS issues and keeps credentials secure
+      const searchUrl = `${BACKEND_API_URL}/api/satellite/search?lat=${lat}&lon=${lon}&startDate=${beforeDateStr}&endDate=${dateStr}&limit=5`;
 
       const searchResponse = await fetch(searchUrl);
-      
+
       if (!searchResponse.ok) {
-        throw new Error('Imagery search failed');
+        const errorData = await searchResponse.json().catch(() => ({}));
+        console.error('Satellite search failed:', errorData);
+        throw new Error(errorData.message || 'Imagery search failed');
       }
 
-      const searchData = await searchResponse.json();
-      
-      if (searchData.value && searchData.value.length > 0) {
-        const imagery = searchData.value.map((item: any) => ({
-          id: item.Id,
-          name: item.Name,
-          date: item.ContentDate.Start,
-          cloudCover: item.CloudCover
-        }));
+      const data = await searchResponse.json();
 
-        return {
-          available: true,
-          imagery,
-          location: { lat, lon },
-          searchDate: dateStr
-        };
-      } else {
-        return {
-          available: false,
-          location: { lat, lon },
-          searchDate: dateStr
-        };
-      }
+      return data;
     } catch (error) {
       console.error('Satellite imagery error:', error);
       return {
@@ -209,15 +160,33 @@ Provide the most specific address possible, along with accurate latitude and lon
     }
   }
 
-  async determineTimestamp(file: File, locationData: any, claimedDate: string | null): Promise<any> {
+  async determineTimestamp(file: File, locationData: any, claimedTimestamp: string | null): Promise<any> {
     const base64Data = await fileToBase64(file);
     const mimeType = file.type;
 
-    const prompt = `You are a forensic analyst determining the TIME this photo was taken (not verifying a claimed time, but DETERMINING it from evidence).
+    // Determine what we're working with
+    const hasFullTimestamp = claimedTimestamp && claimedTimestamp.includes('T');
+    const hasDateOnly = claimedTimestamp && !claimedTimestamp.includes('T');
+    const claimedDate = claimedTimestamp ? claimedTimestamp.split('T')[0] : null;
+    const claimedTime = hasFullTimestamp ? claimedTimestamp.split('T')[1] : null;
+
+    let modeDescription = '';
+    if (hasFullTimestamp) {
+      modeDescription = `VERIFICATION MODE: You are verifying a claimed timestamp of ${claimedDate} at ${claimedTime}. Compare the visual evidence against this claimed time.`;
+    } else if (hasDateOnly) {
+      modeDescription = `PARTIAL VERIFICATION MODE: The date is known (${claimedDate}), but you must DETERMINE the time of day from visual evidence.`;
+    } else {
+      modeDescription = `FULL DETERMINATION MODE: You are determining BOTH the date and time from visual evidence alone.`;
+    }
+
+    const prompt = `You are a forensic analyst analyzing temporal evidence in this photo.
+
+${modeDescription}
 
 Location: ${locationData.address}
 Coordinates: ${locationData.latitude}, ${locationData.longitude}
-${claimedDate ? `Known date: ${claimedDate}` : 'Date unknown'}
+${claimedDate ? `Date: ${claimedDate}` : 'Date: Unknown'}
+${claimedTime ? `Claimed time: ${claimedTime} (VERIFY THIS)` : 'Time: To be determined from evidence'}
 
 Analyze ALL time indicators in the image:
 
@@ -263,10 +232,12 @@ Provide JSON response:
   "shadowDirection": "compass direction or 'towards/away from camera'",
   "lightingQuality": "harsh midday/soft morning/golden evening/etc",
   "reasoning": "detailed explanation of how you determined the time",
-  "additionalEvidence": "any supporting observations"
+  "additionalEvidence": "any supporting observations",
+  ${claimedTime ? `"timeVerification": "Does the visual evidence support the claimed time of ${claimedTime}? Explain discrepancies if any.",` : ''}
+  "estimatedDate": "${claimedDate || 'YYYY-MM-DD or best estimate from seasonal/environmental clues'}"
 }
 
-If you cannot determine a specific time, provide your best estimate with lower confidence.`;
+${hasFullTimestamp ? 'If the claimed time does NOT match the visual evidence, explain why and provide the correct time estimate.' : 'If you cannot determine a specific time, provide your best estimate with lower confidence.'}`;
 
     const response = await this.ai.models.generateContent({
       model: 'gemini-2.5-pro',
@@ -312,7 +283,13 @@ If you cannot determine a specific time, provide your best estimate with lower c
       1.  **Visual Clues:** ${clues}
       2.  **Estimated Location:** ${JSON.stringify(locationData)}
       3.  **Time Analysis:** ${JSON.stringify(timeData)}
-      4.  **Claimed Timestamp:** ${claimedTimestamp || 'Not provided - time was DETERMINED from evidence'}
+      4.  **Claimed Timestamp:** ${
+        !claimedTimestamp
+          ? 'Not provided - both date and time were DETERMINED from evidence'
+          : claimedTimestamp.includes('T')
+          ? `${claimedTimestamp} (VERIFICATION mode - verify both date and time)`
+          : `${claimedTimestamp} (PARTIAL VERIFICATION mode - verify date, time was determined from evidence)`
+      }
       5.  **Grounding Sources:** ${JSON.stringify(sources)}
       6.  **Satellite Imagery Available:** ${satelliteData?.available ? `Yes - ${satelliteData.imagery?.length || 0} images found` : 'No'}
 
@@ -325,14 +302,19 @@ If you cannot determine a specific time, provide your best estimate with lower c
           - Note if satellite imagery confirms the location
       
       2.  **Temporal Analysis:**
-          - If timestamp was DETERMINED (not claimed):
-            * Explain the shadow analysis in detail
-            * Confirm the lighting conditions support the estimated time
-            * Note any activity indicators that corroborate the time
-          - If timestamp was CLAIMED (verification mode):
-            * Compare observed shadows with expected sun position
+          - If FULL VERIFICATION (date+time provided):
+            * Compare observed shadows with expected sun position for claimed date/time
             * Calculate sun azimuth and elevation for that time/location
-            * Verify consistency between claimed time and visual evidence
+            * Verify consistency between claimed timestamp and visual evidence
+            * State whether the timestamp is VERIFIED or DISPUTED
+          - If PARTIAL VERIFICATION (date only provided):
+            * Confirm the date matches seasonal/environmental indicators
+            * Explain the shadow analysis used to determine time of day
+            * Note any activity indicators that corroborate the estimated time
+          - If FULL DETERMINATION (nothing provided):
+            * Explain how date was estimated from seasonal/environmental clues
+            * Explain the shadow analysis in detail for time determination
+            * Confirm the lighting conditions support the estimated time
       
       3.  **Weather/Environmental Verification:**
           - Assess visible weather conditions

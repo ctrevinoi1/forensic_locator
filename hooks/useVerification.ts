@@ -30,11 +30,17 @@ export const useVerification = () => {
     try {
       addLogEntry('info', '🚀 Starting forensic analysis...');
       addLogEntry('info', `📍 Known region: ${locationContext}`);
-      
-      if (claimedTimestamp) {
-        addLogEntry('info', '⏰ Mode: VERIFICATION of claimed timestamp');
+
+      // Determine mode based on what timestamp info was provided
+      const hasTime = claimedTimestamp && claimedTimestamp.includes('T');
+      const hasDateOnly = claimedTimestamp && !claimedTimestamp.includes('T');
+
+      if (hasTime) {
+        addLogEntry('info', '⏰ Mode: VERIFICATION of claimed date and time');
+      } else if (hasDateOnly) {
+        addLogEntry('info', '⏰ Mode: VERIFICATION of claimed date, will estimate time from visual evidence');
       } else {
-        addLogEntry('info', '⏰ Mode: DETERMINATION - will estimate timestamp from visual evidence');
+        addLogEntry('info', '⏰ Mode: DETERMINATION - will estimate date and time from visual evidence');
       }
 
       // PHASE 1: Extract Visual Clues (Rainbolt-style)
@@ -54,11 +60,11 @@ export const useVerification = () => {
 
       // PHASE 3: Fetch Satellite Imagery
       let satelliteData: SatelliteImagery | null = null;
-      
+
       if (locationData.latitude && locationData.longitude) {
         addLogEntry('processing', '🛰️ PHASE 3: Fetching Copernicus satellite imagery...');
-        
-        // Extract date from timestamp if available
+
+        // Extract date from timestamp if available (works for both date-only and datetime formats)
         const dateStr = claimedTimestamp ? claimedTimestamp.split('T')[0] : null;
         
         satelliteData = await geminiService.getSatelliteImagery(
@@ -79,11 +85,12 @@ export const useVerification = () => {
 
       // PHASE 4: Determine/Verify Timestamp
       addLogEntry('processing', '⏰ PHASE 4: Analyzing shadows and lighting for time determination...');
-      
+
+      // Pass the full timestamp (or date-only, or null) to the service
       const timeData = await geminiService.determineTimestamp(
-        file, 
+        file,
         locationData,
-        claimedTimestamp ? claimedTimestamp.split('T')[0] : null
+        claimedTimestamp || null
       );
 
       if (timeData.estimatedTimeOfDay && timeData.estimatedTimeOfDay !== 'unknown') {
