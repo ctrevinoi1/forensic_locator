@@ -8,7 +8,8 @@ import type { LogEntry, Report } from './types';
 
 const App: React.FC = () => {
   const [file, setFile] = useState<File | null>(null);
-  const [claimedTimestamp, setClaimedTimestamp] = useState<string>('');
+  const [claimedDate, setClaimedDate] = useState<string>('');
+  const [claimedTime, setClaimedTime] = useState<string>('');
   const [locationContext, setLocationContext] = useState<string>('Gaza Strip');
   
   const { isLoading, log, report, error, runVerification } = useVerification();
@@ -21,6 +22,11 @@ const App: React.FC = () => {
     if (!file) {
       alert('Please upload a file first.');
       return;
+    }
+    // Combine date and time if both provided, or just date, or empty
+    let claimedTimestamp = '';
+    if (claimedDate) {
+      claimedTimestamp = claimedTime ? `${claimedDate}T${claimedTime}` : claimedDate;
     }
     runVerification(file, claimedTimestamp, locationContext);
   };
@@ -75,21 +81,48 @@ const App: React.FC = () => {
               </div>
 
               <div>
-                <label htmlFor="timestamp" className="flex items-center text-lg font-medium text-gray-300 mb-2">
+                <label className="flex items-center text-lg font-medium text-gray-300 mb-2">
                   <ClockIcon className="w-6 h-6 mr-2 text-blue-accent" />
-                  Claimed Timestamp (Optional)
+                  Claimed Date/Time (Optional)
                 </label>
-                <input
-                  id="timestamp"
-                  type="datetime-local"
-                  value={claimedTimestamp}
-                  onChange={(e) => setClaimedTimestamp(e.target.value)}
-                  className="w-full bg-gray-700 border border-gray-600 rounded-md p-2 text-gray-200 focus:ring-2 focus:ring-blue-accent focus:outline-none"
-                />
-                <p className="text-xs text-gray-500 mt-1">
-                  {claimedTimestamp 
-                    ? 'Will verify this timestamp against evidence'
-                    : 'Leave empty - AI will determine time from shadows and lighting'
+
+                <div className="space-y-2">
+                  <div>
+                    <label htmlFor="date" className="block text-sm text-gray-400 mb-1">
+                      Date
+                    </label>
+                    <input
+                      id="date"
+                      type="date"
+                      value={claimedDate}
+                      onChange={(e) => setClaimedDate(e.target.value)}
+                      className="w-full bg-gray-700 border border-gray-600 rounded-md p-2 text-gray-200 focus:ring-2 focus:ring-blue-accent focus:outline-none"
+                      placeholder="YYYY-MM-DD"
+                    />
+                  </div>
+
+                  <div>
+                    <label htmlFor="time" className="block text-sm text-gray-400 mb-1">
+                      Time (optional, only if you know it)
+                    </label>
+                    <input
+                      id="time"
+                      type="time"
+                      value={claimedTime}
+                      onChange={(e) => setClaimedTime(e.target.value)}
+                      disabled={!claimedDate}
+                      className="w-full bg-gray-700 border border-gray-600 rounded-md p-2 text-gray-200 focus:ring-2 focus:ring-blue-accent focus:outline-none disabled:opacity-50 disabled:cursor-not-allowed"
+                      placeholder="HH:MM"
+                    />
+                  </div>
+                </div>
+
+                <p className="text-xs text-gray-500 mt-2">
+                  {claimedDate && claimedTime
+                    ? 'Will verify both date and time against evidence'
+                    : claimedDate
+                    ? 'Will verify date and estimate time from shadows/lighting'
+                    : 'Leave empty - AI will determine both date and time from visual evidence'
                   }
                 </p>
               </div>

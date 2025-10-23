@@ -160,15 +160,33 @@ Provide the most specific address possible, along with accurate latitude and lon
     }
   }
 
-  async determineTimestamp(file: File, locationData: any, claimedDate: string | null): Promise<any> {
+  async determineTimestamp(file: File, locationData: any, claimedTimestamp: string | null): Promise<any> {
     const base64Data = await fileToBase64(file);
     const mimeType = file.type;
 
-    const prompt = `You are a forensic analyst determining the TIME this photo was taken (not verifying a claimed time, but DETERMINING it from evidence).
+    // Determine what we're working with
+    const hasFullTimestamp = claimedTimestamp && claimedTimestamp.includes('T');
+    const hasDateOnly = claimedTimestamp && !claimedTimestamp.includes('T');
+    const claimedDate = claimedTimestamp ? claimedTimestamp.split('T')[0] : null;
+    const claimedTime = hasFullTimestamp ? claimedTimestamp.split('T')[1] : null;
+
+    let modeDescription = '';
+    if (hasFullTimestamp) {
+      modeDescription = `VERIFICATION MODE: You are verifying a claimed timestamp of ${claimedDate} at ${claimedTime}. Compare the visual evidence against this claimed time.`;
+    } else if (hasDateOnly) {
+      modeDescription = `PARTIAL VERIFICATION MODE: The date is known (${claimedDate}), but you must DETERMINE the time of day from visual evidence.`;
+    } else {
+      modeDescription = `FULL DETERMINATION MODE: You are determining BOTH the date and time from visual evidence alone.`;
+    }
+
+    const prompt = `You are a forensic analyst analyzing temporal evidence in this photo.
+
+${modeDescription}
 
 Location: ${locationData.address}
 Coordinates: ${locationData.latitude}, ${locationData.longitude}
-${claimedDate ? `Known date: ${claimedDate}` : 'Date unknown'}
+${claimedDate ? `Date: ${claimedDate}` : 'Date: Unknown'}
+${claimedTime ? `Claimed time: ${claimedTime} (VERIFY THIS)` : 'Time: To be determined from evidence'}
 
 Analyze ALL time indicators in the image:
 
@@ -214,10 +232,12 @@ Provide JSON response:
   "shadowDirection": "compass direction or 'towards/away from camera'",
   "lightingQuality": "harsh midday/soft morning/golden evening/etc",
   "reasoning": "detailed explanation of how you determined the time",
-  "additionalEvidence": "any supporting observations"
+  "additionalEvidence": "any supporting observations",
+  ${claimedTime ? `"timeVerification": "Does the visual evidence support the claimed time of ${claimedTime}? Explain discrepancies if any.",` : ''}
+  "estimatedDate": "${claimedDate || 'YYYY-MM-DD or best estimate from seasonal/environmental clues'}"
 }
 
-If you cannot determine a specific time, provide your best estimate with lower confidence.`;
+${hasFullTimestamp ? 'If the claimed time does NOT match the visual evidence, explain why and provide the correct time estimate.' : 'If you cannot determine a specific time, provide your best estimate with lower confidence.'}`;
 
     const response = await this.ai.models.generateContent({
       model: 'gemini-2.5-pro',
@@ -263,7 +283,13 @@ If you cannot determine a specific time, provide your best estimate with lower c
       1.  **Visual Clues:** ${clues}
       2.  **Estimated Location:** ${JSON.stringify(locationData)}
       3.  **Time Analysis:** ${JSON.stringify(timeData)}
-      4.  **Claimed Timestamp:** ${claimedTimestamp || 'Not provided - time was DETERMINED from evidence'}
+      4.  **Claimed Timestamp:** ${
+        !claimedTimestamp
+          ? 'Not provided - both date and time were DETERMINED from evidence'
+          : claimedTimestamp.includes('T')
+          ? `${claimedTimestamp} (VERIFICATION mode - verify both date and time)`
+          : `${claimedTimestamp} (PARTIAL VERIFICATION mode - verify date, time was determined from evidence)`
+      }
       5.  **Grounding Sources:** ${JSON.stringify(sources)}
       6.  **Satellite Imagery Available:** ${satelliteData?.available ? `Yes - ${satelliteData.imagery?.length || 0} images found` : 'No'}
 
@@ -276,14 +302,19 @@ If you cannot determine a specific time, provide your best estimate with lower c
           - Note if satellite imagery confirms the location
       
       2.  **Temporal Analysis:**
-          - If timestamp was DETERMINED (not claimed):
-            * Explain the shadow analysis in detail
-            * Confirm the lighting conditions support the estimated time
-            * Note any activity indicators that corroborate the time
-          - If timestamp was CLAIMED (verification mode):
-            * Compare observed shadows with expected sun position
+          - If FULL VERIFICATION (date+time provided):
+            * Compare observed shadows with expected sun position for claimed date/time
             * Calculate sun azimuth and elevation for that time/location
-            * Verify consistency between claimed time and visual evidence
+            * Verify consistency between claimed timestamp and visual evidence
+            * State whether the timestamp is VERIFIED or DISPUTED
+          - If PARTIAL VERIFICATION (date only provided):
+            * Confirm the date matches seasonal/environmental indicators
+            * Explain the shadow analysis used to determine time of day
+            * Note any activity indicators that corroborate the estimated time
+          - If FULL DETERMINATION (nothing provided):
+            * Explain how date was estimated from seasonal/environmental clues
+            * Explain the shadow analysis in detail for time determination
+            * Confirm the lighting conditions support the estimated time
       
       3.  **Weather/Environmental Verification:**
           - Assess visible weather conditions
